@@ -514,12 +514,10 @@ with t3:
         fig_dist = go.Figure()
         fig_dist.add_trace(go.Histogram(x=returns_bank, name='Rendements', nbinsx=50, opacity=0.7))
         
-        # Lignes VaR
         for conf, color, label in [(0.90, 'orange', 'VaR 90%'), (0.95, 'red', 'VaR 95%'), (0.99, 'darkred', 'VaR 99%')]:
             var_val = returns_bank.quantile(1 - conf)
             fig_dist.add_vline(x=var_val, line_dash='dash', line_color=color, annotation_text=f'{label}: {var_val:.2%}')
         
-        # Densité
         try:
             kde = stats.gaussian_kde(returns_bank)
             x_range = np.linspace(returns_bank.min(), returns_bank.max(), 100)
@@ -534,9 +532,7 @@ with t3:
 with t4:
     st.header("📈 Capital Market Line (CML) & Security Market Line (SML)")
     
-    # CML
     st.subheader("📊 Capital Market Line (CML)")
-    
     if vol_sharpe > 0:
         cml_risks = np.linspace(0, max(volatility.max(), vol_sharpe) * 1.5, 50)
         cml_returns = rf + (ret_sharpe - rf) / vol_sharpe * cml_risks
@@ -552,9 +548,7 @@ with t4:
         fig_cml.update_yaxes(tickformat='.0%')
         st.plotly_chart(fig_cml, use_container_width=True)
     
-    # SML
     st.subheader("📈 Security Market Line (SML)")
-    
     if not betas.empty:
         sml_betas = np.linspace(0, max(betas.max() * 1.2, 1.5), 50)
         sml_returns = rf + (ret_sharpe - rf) * sml_betas
@@ -569,7 +563,7 @@ with t4:
         fig_sml.update_yaxes(tickformat='.0%')
         st.plotly_chart(fig_sml, use_container_width=True)
         
-        st.dataframe(pd.DataFrame({'Banque': betas.index, 'Beta': betas.values, 'Interprétation': ['Défensif' if b < 1 else 'Agressif' for b in betas.values]}).style.format({'Beta': '{:.3f}'}), use_container_width=True)
+        st.dataframe(pd.DataFrame({'Banque': betas.index, 'Beta': betas.values, 'Interprétation': ['Défensif (β<1)' if b < 1 else 'Agressif (β>1)' for b in betas.values]}).style.format({'Beta': '{:.3f}'}), use_container_width=True)
 
 with t5:
     st.header("🎯 Optimisation Markowitz")
@@ -600,7 +594,6 @@ with t5:
             fig_pie2 = px.pie(weights_minvar_df.head(8), names='Banque', values='Poids', title='Répartition Variance min')
             st.plotly_chart(fig_pie2, use_container_width=True)
     
-    # Tableau comparatif
     st.subheader("📊 Comparaison des portefeuilles")
     comparison_df = pd.DataFrame({
         'Métrique': ['Rendement', 'Risque', 'Sharpe', 'VaR 95%'],
@@ -615,28 +608,24 @@ with t6:
     if len(frontier_returns) > 0:
         fig_frontier = go.Figure()
         
-        # Frontière
         fig_frontier.add_trace(go.Scatter(
             x=frontier_risks, y=frontier_returns,
             mode='lines+markers', name='Frontière efficiente',
             line=dict(color='blue', width=2), marker=dict(size=5)
         ))
         
-        # Portefeuille Sharpe max
         fig_frontier.add_trace(go.Scatter(
             x=[vol_sharpe], y=[ret_sharpe],
             mode='markers', name='Sharpe max',
             marker=dict(size=15, color='red', symbol='star')
         ))
         
-        # Portefeuille variance min
         fig_frontier.add_trace(go.Scatter(
             x=[vol_minvar], y=[ret_minvar],
             mode='markers', name='Variance min',
             marker=dict(size=15, color='green', symbol='triangle-up')
         ))
         
-        # Banques individuelles
         fig_frontier.add_trace(go.Scatter(
             x=volatility, y=mean_returns,
             mode='markers', name='Banques',
@@ -684,16 +673,8 @@ with t7:
         use_container_width=True
     )
     
-    # Graphique score
     fig_score = px.bar(metrics_df, x='Banque', y='Score', color='Recommandation', title='Score de qualité')
     st.plotly_chart(fig_score, use_container_width=True)
-    
-    st.warning("""
-    ⚠️ **Avertissement :** 
-    - Analyse quantitative uniquement
-    - Vérifiez liquidité, frais, fiscalité avant investissement
-    - Consultez un conseiller professionnel
-    """)
 
 with t8:
     st.header("💼 Simulation d'investissement")
@@ -703,7 +684,6 @@ with t8:
     with col1:
         st.subheader("Portefeuille Sharpe Max")
         st.dataframe(weights_sharpe_df.style.format({'Poids': '{:.2%}', 'Montant (TND)': '{:,.2f}'}), use_container_width=True)
-        
         if not weights_sharpe_df.empty:
             fig_inv1 = px.bar(weights_sharpe_df.head(8), x='Banque', y='Montant (TND)', title='Montants à investir - Sharpe max', color='Montant (TND)')
             st.plotly_chart(fig_inv1, use_container_width=True)
@@ -711,12 +691,10 @@ with t8:
     with col2:
         st.subheader("Portefeuille Variance Min")
         st.dataframe(weights_minvar_df.style.format({'Poids': '{:.2%}', 'Montant (TND)': '{:,.2f}'}), use_container_width=True)
-        
         if not weights_minvar_df.empty:
             fig_inv2 = px.bar(weights_minvar_df.head(8), x='Banque', y='Montant (TND)', title='Montants à investir - Variance min', color='Montant (TND)')
             st.plotly_chart(fig_inv2, use_container_width=True)
     
-    # Profil investisseur
     st.subheader("Recommandation personnalisée")
     profile = st.selectbox("Votre profil", ["Prudent", "Équilibré", "Dynamique"])
     
@@ -734,4 +712,67 @@ with t8:
     else:
         st.success("✅ Portefeuille Sharpe maximum recommandé")
         st.metric("Rentabilité attendue", f"{ret_sharpe:.2%}")
-        st.metric("Ris
+        st.metric("Risque attendu", f"{vol_sharpe:.2%}")
+        st.metric("VaR 95%", f"{port_var_sharpe:.2%}")
+
+with t9:
+    st.header("🔗 Matrices de corrélation et covariance")
+    
+    st.subheader("Matrice de corrélation")
+    fig_corr = px.imshow(corr_matrix, text_auto=True, aspect='auto', title='Corrélations entre banques', color_continuous_scale='RdBu', zmin=-1, zmax=1)
+    fig_corr.update_layout(height=600)
+    st.plotly_chart(fig_corr, use_container_width=True)
+    
+    st.subheader("Matrice de covariance annualisée")
+    fig_cov = px.imshow(cov_matrix, text_auto=True, aspect='auto', title='Covariance annualisée', color_continuous_scale='Viridis')
+    fig_cov.update_layout(height=600)
+    st.plotly_chart(fig_cov, use_container_width=True)
+
+with t10:
+    st.header("📥 Export des résultats")
+    
+    try:
+        output = io.BytesIO()
+        
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            selected_prices.to_excel(writer, sheet_name='1_Prix')
+            returns.to_excel(writer, sheet_name='2_Rendements')
+            cumulative_returns.to_excel(writer, sheet_name='3_Rendements_cumules')
+            metrics_df.to_excel(writer, sheet_name='4_Metriques_banques', index=False)
+            weights_sharpe_df.to_excel(writer, sheet_name='5_Allocation_Sharpe_max', index=False)
+            weights_minvar_df.to_excel(writer, sheet_name='6_Allocation_Variance_min', index=False)
+            corr_matrix.to_excel(writer, sheet_name='7_Matrice_correlation')
+            cov_matrix.to_excel(writer, sheet_name='8_Matrice_covariance')
+            drawdown.to_excel(writer, sheet_name='9_Drawdown')
+            
+            portfolio_stats = pd.DataFrame({
+                'Métrique': ['Rendement Sharpe max', 'Risque Sharpe max', 'Sharpe ratio', 'VaR 95% Sharpe max',
+                            'Rendement Variance min', 'Risque Variance min', 'Sharpe ratio Variance min', 'VaR 95% Variance min'],
+                'Valeur': [f'{ret_sharpe:.2%}', f'{vol_sharpe:.2%}', f'{sharpe_opt:.4f}', f'{port_var_sharpe:.2%}',
+                          f'{ret_minvar:.2%}', f'{vol_minvar:.2%}', f'{sharpe_minvar:.4f}', f'{port_var_minvar:.2%}']
+            })
+            portfolio_stats.to_excel(writer, sheet_name='10_Stats_portefeuille', index=False)
+        
+        st.download_button(
+            label="📥 Télécharger le rapport Excel complet",
+            data=output.getvalue(),
+            file_name=f"markowitz_bvmt_{selected_year}.xlsx",
+            use_container_width=True
+        )
+        
+        st.success("✅ Rapport généré avec succès!")
+        
+    except Exception as e:
+        st.error(f"Erreur export: {e}")
+
+# ==============================
+# FOOTER PERSONNALISÉ
+# ==============================
+
+st.markdown("---")
+st.markdown(
+    "<div style='text-align: center; color: #666666; padding: 10px;'>"
+    "📊 <strong>Créé par Taboubi Farah</strong> | Étudiante M1 Analyste Financier | IHEC Carthage 2025-2026"
+    "</div>",
+    unsafe_allow_html=True
+)

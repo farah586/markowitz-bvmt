@@ -175,7 +175,7 @@ def optimize_portfolio(mean_returns, cov_matrix, rf):
     return weights_sharpe, ret_sharpe, vol_sharpe, sharpe_ratio, weights_minvar, ret_minvar, vol_minvar, sharpe_minvar
 
 
-def efficient_frontier(mean_returns, cov_matrix, rf, n_points=30):
+def efficient_frontier(mean_returns, cov_matrix, rf, n_points=20):
     """Calcul de la frontière efficiente"""
     frontier_returns = []
     frontier_risks = []
@@ -423,27 +423,26 @@ with t1:
     fig_cum.update_layout(height=400)
     st.plotly_chart(fig_cum, use_container_width=True)
     
-    # Carte rendement/risque
+    # Carte rendement/risque - VERSION SANS SIZE POUR ÉVITER L'ERREUR
     st.subheader("🗺️ Carte rendement / risque")
     plot_df = metrics_df.copy()
     plot_df['Rendement annualisé'] = plot_df['Rendement annualisé'].clip(-0.5, 0.5)
     plot_df['Volatilité'] = plot_df['Volatilité'].clip(0, 1)
     
+    # Scatter SANS le paramètre size pour éviter l'erreur
     fig_scatter = px.scatter(
         plot_df,
         x='Volatilité',
         y='Rendement annualisé',
-        size='Sharpe',
         color='Sharpe',
         text='Banque',
         title='Positionnement des banques',
-        labels={'Volatilité': 'Risque', 'Rendement annualisé': 'Rendement'},
-        color_continuous_scale='RdYlGn',
-        size_max=30
+        labels={'Volatilité': 'Risque (Volatilité)', 'Rendement annualisé': 'Rendement annualisé'},
+        color_continuous_scale='RdYlGn'
     )
+    fig_scatter.update_traces(textposition='top center', marker=dict(size=18))
     fig_scatter.update_xaxes(tickformat='.0%')
     fig_scatter.update_yaxes(tickformat='.0%')
-    fig_scatter.update_traces(textposition='top center')
     fig_scatter.update_layout(height=500)
     st.plotly_chart(fig_scatter, use_container_width=True)
 
@@ -734,4 +733,85 @@ with t8:
         st.metric("Rentabilité attendue", f"{mix_ret:.2%}")
         st.metric("Risque attendu", f"{mix_vol:.2%}")
     else:
-        st.success
+        st.success("✅ Portefeuille Sharpe maximum recommandé")
+        st.metric("Rentabilité attendue", f"{ret_sharpe:.2%}")
+        st.metric("Risque attendu", f"{vol_sharpe:.2%}")
+        st.metric("VaR 95%", f"{port_var_sharpe:.2%}")
+
+with t9:
+    st.header("🔗 Matrices de corrélation et covariance")
+    
+    st.subheader("Matrice de corrélation")
+    fig_corr = px.imshow(
+        corr_matrix,
+        text_auto=True,
+        aspect='auto',
+        title='Corrélations entre banques',
+        color_continuous_scale='RdBu',
+        zmin=-1, zmax=1
+    )
+    fig_corr.update_layout(height=600)
+    st.plotly_chart(fig_corr, use_container_width=True)
+    
+    st.subheader("Matrice de covariance annualisée")
+    fig_cov = px.imshow(
+        cov_matrix,
+        text_auto=True,
+        aspect='auto',
+        title='Covariance annualisée',
+        color_continuous_scale='Viridis'
+    )
+    fig_cov.update_layout(height=600)
+    st.plotly_chart(fig_cov, use_container_width=True)
+
+with t10:
+    st.header("📥 Export des résultats")
+    
+    try:
+        output = io.BytesIO()
+        
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            selected_prices.to_excel(writer, sheet_name='1_Prix')
+            returns.to_excel(writer, sheet_name='2_Rendements')
+            cumulative_returns.to_excel(writer, sheet_name='3_Rendements_cumules')
+            metrics_df.to_excel(writer, sheet_name='4_Metriques_banques', index=False)
+            weights_sharpe_df.to_excel(writer, sheet_name='5_Allocation_Sharpe_max', index=False)
+            weights_minvar_df.to_excel(writer, sheet_name='6_Allocation_Variance_min', index=False)
+            corr_matrix.to_excel(writer, sheet_name='7_Matrice_correlation')
+            cov_matrix.to_excel(writer, sheet_name='8_Matrice_covariance')
+            drawdown.to_excel(writer, sheet_name='9_Drawdown')
+            
+            # Statistiques portfolio
+            portfolio_stats = pd.DataFrame({
+                'Métrique': ['Rendement Sharpe max', 'Risque Sharpe max', 'Sharpe ratio', 'VaR 95% Sharpe max',
+                            'Rendement Variance min', 'Risque Variance min', 'Sharpe ratio Variance min', 'VaR 95% Variance min'],
+                'Valeur': [f'{ret_sharpe:.2%}', f'{vol_sharpe:.2%}', f'{sharpe_opt:.4f}', f'{port_var_sharpe:.2%}',
+                          f'{ret_minvar:.2%}', f'{vol_minvar:.2%}', f'{sharpe_minvar:.4f}', f'{port_var_minvar:.2%}']
+            })
+            portfolio_stats.to_excel(writer, sheet_name='10_Stats_portefeuille', index=False)
+        
+        st.download_button(
+            label="📥 Télécharger le rapport Excel complet",
+            data=output.getvalue(),
+            file_name=f"markowitz_bvmt_{selected_year}.xlsx",
+            use_container_width=True
+        )
+        
+        st.success("✅ Le rapport contient toutes les analyses:")
+        st.markdown("""
+        - Prix historiques
+        - Rendements journaliers et cumulés
+        - Métriques individuelles (Sharpe, VaR 90/95/99%, CVaR, Beta, Drawdown)
+        - Allocations optimales (Sharpe max et Variance min)
+        - Matrices de corrélation et covariance
+        - Drawdown
+        - Statistiques des portefeuilles
+        """)
+    
+    except Exception as e:
+        st.error(f"Erreur export: {e}")
+
+# Footer
+st.markdown("---")
+st.caption("⚠️ **Disclaimer :** Analyse à but éducatif - Consultez un professionnel avant d'investir")
+st.caption(f"📊 Méthodologie Markowitz | Annualisation 252 jours | Données BVMT {selected_year}")

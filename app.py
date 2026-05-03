@@ -20,21 +20,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Style personnalisé
-st.markdown("""
-<style>
-    .stMetric {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 10px;
-    }
-    .reportview-container .main .block-container {
-        padding-top: 2rem;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Titre principal
 st.title("📊 Tableau de bord Markowitz BVMT")
 st.markdown("### Optimisation de portefeuille - Analyse financière avancée")
 st.markdown("---")
@@ -59,16 +44,28 @@ def load_excel_file(file_path, year):
         df = pd.read_excel(file_path)
         df.columns = df.columns.str.strip()
         
-        # Vérification des colonnes
-        required_cols = ["SEANCE", "VALEUR", "CLOTURE"]
-        missing_cols = [col for col in required_cols if col not in df.columns]
+        st.sidebar.write(f"📋 Colonnes trouvées dans {year}:", list(df.columns))
         
-        if missing_cols:
-            st.error(f"Colonnes manquantes dans {year}: {missing_cols}")
+        # Trouver la colonne des noms de sociétés (peut être VALEUR ou VALUEUR)
+        societe_col = None
+        date_col = None
+        close_col = None
+        
+        for col in df.columns:
+            if col.upper() in ['VALEUR', 'VALUEUR', 'SOCIETE', 'NOM']:
+                societe_col = col
+            elif col.upper() in ['SEANCE', 'DATE']:
+                date_col = col
+            elif col.upper() in ['CLOTURE', 'CLOSE', 'PRIX']:
+                close_col = col
+        
+        if societe_col is None or date_col is None or close_col is None:
+            st.error(f"Colonnes requises non trouvées dans {year}")
+            st.write(f"Colonnes disponibles: {list(df.columns)}")
             return None
         
-        # Sélection des colonnes utiles
-        df = df[["SEANCE", "VALEUR", "CLOTURE"]].copy()
+        # Sélection des colonnes
+        df = df[[date_col, societe_col, close_col]].copy()
         df.columns = ["Date", "Societe", "Close"]
         
         # Nettoyage des dates
@@ -82,16 +79,35 @@ def load_excel_file(file_path, year):
         df = df.dropna(subset=["Close"])
         df = df[df["Close"] > 0]
         
-        # Filtrage par année
+        # Filtrer par année
         df["Annee"] = df["Date"].dt.year
         df = df[df["Annee"] == year]
         
-        # Filtrage des banques uniquement
-        df = df[df["Societe"].str.upper().isin([b.upper() for b in BANQUES])]
-        
         if df.empty:
-            st.warning(f"Aucune banque trouvée pour {year}")
+            st.warning(f"Aucune donnée pour l'année {year}")
             return None
+        
+        # Nettoyer les noms des sociétés
+        df["Societe"] = df["Societe"].astype(str).str.strip()
+        
+        # Filtrer les banques (correspondance approximative)
+        banques_trouvees = []
+        for bank in BANQUES:
+            mask = df["Societe"].str.upper().str.contains(bank.upper(), na=False)
+            if mask.any():
+                banques_trouvees.append(bank)
+                df.loc[mask, "Societe"] = bank  # Uniformiser le nom
+        
+        if not banques_trouvees:
+            st.warning(f"Aucune banque trouvée dans {year}")
+            st.write("Premières sociétés disponibles:")
+            st.write(df["Societe"].unique()[:20])
+            return None
+        
+        # Garder seulement les banques
+        df = df[df["Societe"].isin(banques_trouvees)]
+        
+        st.sidebar.success(f"✅ {year}: {len(df['Societe'].unique())} banques trouvées")
         
         return df
     
@@ -213,8 +229,10 @@ for f in BASE_DIR.iterdir():
 
 if file_path is None:
     st.error(f"❌ Fichier pour {selected_year} non trouvé!")
-    st.info(f"Assurez-vous d'avoir un fichier nommé {selected_year}.xlsx dans le dossier")
+    st.info(f"Fichiers trouvés: {[f.name for f in BASE_DIR.iterdir() if f.suffix in ['.xlsx', '.xls']]}")
     st.stop()
+
+st.sidebar.info(f"📁 Fichier: {file_path.name}")
 
 # Chargement
 with st.spinner(f"📂 Chargement des données {selected_year}..."):
@@ -232,9 +250,15 @@ with st.spinner(f"📂 Chargement des données {selected_year}..."):
 
 # Affichage des banques disponibles
 st.sidebar.success(f"✅ {len(prices.columns)} banques chargées")
-with st.sidebar.expander("🏦 Banques disponibles"):
-    for bank in sorted(prices.columns):
-        st.write(f"• {bank}")
+
+if len(prices.columns) > 0:
+    with st.sidebar.expander("🏦 Banques disponibles"):
+        for bank in sorted(prices.columns):
+            st.write(f"• {bank}")
+else:
+    st.error("❌ Aucune banque trouvée! Vérifiez le nom des colonnes dans votre fichier Excel.")
+    st.write("Le fichier doit contenir une colonne 'SEANCE' (date), 'VALEUR' ou 'VALUEUR' (nom), et 'CLOTURE' (prix)")
+    st.stop()
 
 # Sélection des banques
 selected_banks = st.sidebar.multiselect(
@@ -246,7 +270,10 @@ selected_banks = st.sidebar.multiselect(
 
 if len(selected_banks) < 2:
     st.warning("⚠️ Veuillez sélectionner au moins 2 banques")
-    selected_banks = sorted(prices.columns.tolist())[:2]
+    if len(prices.columns) >= 2:
+        selected_banks = sorted(prices.columns.tolist())[:2]
+    else:
+        st.stop()
 
 # Paramètres financiers
 st.sidebar.markdown("---")
@@ -349,11 +376,12 @@ with st.spinner("🔄 Calculs en cours..."):
     
     # Recommandations
     def get_recommendation(row):
-        if row["Ratio de Sharpe"] > 1 and row["Volatilité annualisée"] < metrics_df["Volatilité annualisée"].median():
+        median_vol = metrics_df["Volatilité annualisée"].median()
+        if row["Ratio de Sharpe"] > 1 and row["Volatilité annualisée"] < median_vol:
             return "🟢 Très attractive"
         elif row["Ratio de Sharpe"] > 0.5:
             return "🟡 Intéressante"
-        elif row["Volatilité annualisée"] > metrics_df["Volatilité annualisée"].median():
+        elif row["Volatilité annualisée"] > median_vol:
             return "🔴 Risque élevé"
         else:
             return "⚪ À surveiller"
@@ -369,11 +397,11 @@ st.header(f"📊 Analyse {selected_year} - Portefeuille bancaire optimal")
 # KPIS
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
-    st.metric("🏦 Banques", len(selected_banks), delta=None)
+    st.metric("🏦 Banques", len(selected_banks))
 with col2:
-    st.metric("📈 Rentabilité", f"{ret_opt:.2%}", delta_color="normal")
+    st.metric("📈 Rentabilité", f"{ret_opt:.2%}")
 with col3:
-    st.metric("⚠️ Risque", f"{vol_opt:.2%}", delta_color="inverse")
+    st.metric("⚠️ Risque", f"{vol_opt:.2%}")
 with col4:
     st.metric("🎯 Sharpe", f"{sharpe_opt:.3f}")
 with col5:
@@ -393,46 +421,48 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 
 with tab1:
     # Évolution des cours
-    st.subheader("📈 Évolution des cours")
-    fig_prices = px.line(
-        selected_prices,
-        title=f"Cours de clôture - {selected_year}",
-        labels={"value": "Prix (TND)", "variable": "Banque"}
-    )
-    fig_prices.update_layout(height=450, hovermode="x unified")
-    st.plotly_chart(fig_prices, use_container_width=True)
+    if not selected_prices.empty:
+        st.subheader("📈 Évolution des cours")
+        fig_prices = px.line(
+            selected_prices,
+            title=f"Cours de clôture - {selected_year}",
+            labels={"value": "Prix (TND)", "variable": "Banque"}
+        )
+        fig_prices.update_layout(height=450, hovermode="x unified")
+        st.plotly_chart(fig_prices, use_container_width=True)
     
     # Rendements cumulés
-    st.subheader("📊 Performance cumulée")
-    fig_cum = px.line(
-        cumulative_returns,
-        title="Rendements cumulés",
-        labels={"value": "Rendement", "variable": "Banque"}
-    )
-    fig_cum.update_yaxes(tickformat=".0%")
-    fig_cum.update_layout(height=400, hovermode="x unified")
-    st.plotly_chart(fig_cum, use_container_width=True)
+    if not cumulative_returns.empty:
+        st.subheader("📊 Performance cumulée")
+        fig_cum = px.line(
+            cumulative_returns,
+            title="Rendements cumulés",
+            labels={"value": "Rendement", "variable": "Banque"}
+        )
+        fig_cum.update_yaxes(tickformat=".0%")
+        fig_cum.update_layout(height=400, hovermode="x unified")
+        st.plotly_chart(fig_cum, use_container_width=True)
     
     # Carte rendement/risque
-    st.subheader("🗺️ Carte rendement / risque")
-    fig_scatter = px.scatter(
-        metrics_df,
-        x="Volatilité annualisée",
-        y="Rentabilité annualisée",
-        size="Ratio de Sharpe",
-        color="Ratio de Sharpe",
-        text="Banque",
-        title="Positionnement des banques",
-        labels={"Volatilité annualisée": "Risque", "Rentabilité annualisée": "Rendement"}
-    )
-    fig_scatter.update_xaxes(tickformat=".0%")
-    fig_scatter.update_yaxes(tickformat=".0%")
-    fig_scatter.update_traces(textposition="top center")
-    fig_scatter.update_layout(height=500)
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    if not metrics_df.empty:
+        st.subheader("🗺️ Carte rendement / risque")
+        fig_scatter = px.scatter(
+            metrics_df,
+            x="Volatilité annualisée",
+            y="Rentabilité annualisée",
+            size="Ratio de Sharpe",
+            color="Ratio de Sharpe",
+            text="Banque",
+            title="Positionnement des banques",
+            labels={"Volatilité annualisée": "Risque", "Rentabilité annualisée": "Rendement"}
+        )
+        fig_scatter.update_xaxes(tickformat=".0%")
+        fig_scatter.update_yaxes(tickformat=".0%")
+        fig_scatter.update_traces(textposition="top center")
+        fig_scatter.update_layout(height=500)
+        st.plotly_chart(fig_scatter, use_container_width=True)
 
 with tab2:
-    # Tableau des métriques
     st.subheader("📊 Métriques détaillées par banque")
     st.dataframe(
         metrics_df.style.format({
@@ -448,7 +478,6 @@ with tab2:
         height=400
     )
     
-    # Graphiques individuels
     col_a, col_b = st.columns(2)
     
     with col_a:
@@ -496,79 +525,31 @@ with tab2:
         st.plotly_chart(fig_beta, use_container_width=True)
 
 with tab3:
-    # Drawdown
-    st.subheader("📉 Drawdown (perte maximale)")
-    fig_dd = px.area(
-        drawdown,
-        title="Drawdown des banques",
-        labels={"value": "Perte (%)", "variable": "Banque"}
-    )
-    fig_dd.update_yaxes(tickformat=".0%")
-    fig_dd.update_layout(height=450, hovermode="x unified")
-    st.plotly_chart(fig_dd, use_container_width=True)
-    
-    # VaR
-    st.subheader("📊 Value at Risk (VaR) à 95%")
-    fig_var = px.bar(
-        metrics_df,
-        x="Banque",
-        y="VaR 95%",
-        title="Perte maximale attendue (95% de confiance)",
-        color="VaR 95%",
-        color_continuous_scale="Reds"
-    )
-    fig_var.update_yaxes(tickformat=".1f")
-    st.plotly_chart(fig_var, use_container_width=True)
-    
-    # Distribution des rendements
-    st.subheader("📈 Distribution des rendements")
-    selected_bank_var = st.selectbox("Choisir une banque", selected_banks, key="var_select")
-    
-    if selected_bank_var:
-        returns_bank = returns[selected_bank_var].dropna()
-        
-        fig_dist = go.Figure()
-        fig_dist.add_trace(go.Histogram(
-            x=returns_bank,
-            name="Rendements",
-            nbinsx=50,
-            opacity=0.7,
-            marker_color="lightblue"
-        ))
-        
-        # Ajout des lignes VaR
-        var_vals = [returns_bank.quantile(0.10), returns_bank.quantile(0.05), returns_bank.quantile(0.01)]
-        colors = ["orange", "red", "darkred"]
-        labels = ["VaR 90%", "VaR 95%", "VaR 99%"]
-        
-        for var_val, color, label in zip(var_vals, colors, labels):
-            fig_dist.add_vline(
-                x=var_val, line_dash="dash", line_color=color,
-                annotation_text=f"{label}: {var_val:.2%}"
-            )
-        
-        # Courbe de densité
-        try:
-            kde = stats.gaussian_kde(returns_bank)
-            x_range = np.linspace(returns_bank.min(), returns_bank.max(), 100)
-            y_range = kde(x_range) * len(returns_bank) * (returns_bank.max() - returns_bank.min()) / 50
-            fig_dist.add_trace(go.Scatter(
-                x=x_range, y=y_range, name="Densité", line=dict(color="blue", width=2)
-            ))
-        except:
-            pass
-        
-        fig_dist.update_layout(
-            title=f"Distribution des rendements - {selected_bank_var}",
-            xaxis_title="Rendement journalier",
-            yaxis_title="Fréquence",
-            height=500
+    if not drawdown.empty:
+        st.subheader("📉 Drawdown (perte maximale)")
+        fig_dd = px.area(
+            drawdown,
+            title="Drawdown des banques",
+            labels={"value": "Perte (%)", "variable": "Banque"}
         )
-        fig_dist.update_xaxes(tickformat=".1%")
-        st.plotly_chart(fig_dist, use_container_width=True)
+        fig_dd.update_yaxes(tickformat=".0%")
+        fig_dd.update_layout(height=450, hovermode="x unified")
+        st.plotly_chart(fig_dd, use_container_width=True)
+    
+    if not metrics_df.empty:
+        st.subheader("📊 Value at Risk (VaR) à 95%")
+        fig_var = px.bar(
+            metrics_df,
+            x="Banque",
+            y="VaR 95%",
+            title="Perte maximale attendue (95% de confiance)",
+            color="VaR 95%",
+            color_continuous_scale="Reds"
+        )
+        fig_var.update_yaxes(tickformat=".1f")
+        st.plotly_chart(fig_var, use_container_width=True)
 
 with tab4:
-    # Portefeuille optimal
     st.subheader("🎯 Portefeuille optimal (Sharpe maximum)")
     
     col_a, col_b, col_c = st.columns(3)
@@ -581,7 +562,6 @@ with tab4:
     
     st.markdown("---")
     
-    # Allocation
     col_pie, col_table = st.columns([1, 1.5])
     
     with col_pie:
@@ -607,48 +587,46 @@ with tab4:
             height=400
         )
     
-    # Graphique d'allocation
-    fig_alloc = px.bar(
-        weights_df,
-        x="Banque",
-        y="Poids optimal",
-        title="Allocation par banque",
-        color="Poids optimal",
-        color_continuous_scale="Viridis",
-        text_auto=".1%"
-    )
-    fig_alloc.update_yaxes(tickformat=".0%")
-    fig_alloc.update_layout(height=450)
-    st.plotly_chart(fig_alloc, use_container_width=True)
+    if len(weights_df) > 0:
+        fig_alloc = px.bar(
+            weights_df,
+            x="Banque",
+            y="Poids optimal",
+            title="Allocation par banque",
+            color="Poids optimal",
+            color_continuous_scale="Viridis",
+            text_auto=".1%"
+        )
+        fig_alloc.update_yaxes(tickformat=".0%")
+        fig_alloc.update_layout(height=450)
+        st.plotly_chart(fig_alloc, use_container_width=True)
 
 with tab5:
-    # Matrice de corrélation
-    st.subheader("🔗 Matrice de corrélation")
-    fig_corr = px.imshow(
-        corr_matrix,
-        text_auto=True,
-        aspect="auto",
-        title="Corrélations entre banques",
-        color_continuous_scale="RdBu",
-        zmin=-1, zmax=1
-    )
-    fig_corr.update_layout(height=600)
-    st.plotly_chart(fig_corr, use_container_width=True)
-    
-    # Heatmap colorée
-    st.subheader("🎨 Matrice de covariance annualisée")
-    fig_cov = px.imshow(
-        cov_matrix,
-        text_auto=True,
-        aspect="auto",
-        title="Covariance annualisée",
-        color_continuous_scale="Viridis"
-    )
-    fig_cov.update_layout(height=600)
-    st.plotly_chart(fig_cov, use_container_width=True)
+    if not corr_matrix.empty:
+        st.subheader("🔗 Matrice de corrélation")
+        fig_corr = px.imshow(
+            corr_matrix,
+            text_auto=True,
+            aspect="auto",
+            title="Corrélations entre banques",
+            color_continuous_scale="RdBu",
+            zmin=-1, zmax=1
+        )
+        fig_corr.update_layout(height=600)
+        st.plotly_chart(fig_corr, use_container_width=True)
+        
+        st.subheader("🎨 Matrice de covariance annualisée")
+        fig_cov = px.imshow(
+            cov_matrix,
+            text_auto=True,
+            aspect="auto",
+            title="Covariance annualisée",
+            color_continuous_scale="Viridis"
+        )
+        fig_cov.update_layout(height=600)
+        st.plotly_chart(fig_cov, use_container_width=True)
 
 with tab6:
-    # Export
     st.subheader("📥 Export des résultats")
     st.info("Téléchargez un rapport Excel complet avec toutes les analyses")
     
@@ -663,9 +641,9 @@ with tab6:
             weights_df.to_excel(writer, sheet_name="5_Allocation_portefeuille", index=False)
             cov_matrix.to_excel(writer, sheet_name="6_Matrice_covariance")
             corr_matrix.to_excel(writer, sheet_name="7_Matrice_correlation")
-            drawdown.to_excel(writer, sheet_name="8_Drawdown")
+            if not drawdown.empty:
+                drawdown.to_excel(writer, sheet_name="8_Drawdown")
             
-            # Portfolio stats
             portfolio_stats = pd.DataFrame({
                 "Métrique": [
                     "Rentabilité annualisée", "Volatilité annualisée", "Ratio de Sharpe",
@@ -690,17 +668,6 @@ with tab6:
         
     except Exception as e:
         st.error(f"Erreur lors de la création du rapport: {e}")
-    
-    st.markdown("---")
-    st.success("✅ Le rapport contient toutes les analyses:")
-    st.markdown("""
-    - 📈 Prix et rendements historiques
-    - 📊 Métriques individuelles (Sharpe, VaR, Beta)
-    - 🎯 Allocation optimale du portefeuille
-    - 🔗 Matrices de covariance et corrélation
-    - 📉 Analyse des risques (Drawdown)
-    - 💼 Statistiques du portefeuille optimal
-    """)
 
 # ==============================
 # RECOMMANDATIONS FINALES
@@ -725,9 +692,8 @@ with col_rec2:
 with col_rec3:
     st.warning("⚠️ **Avertissement**\n\nCette analyse est basée sur des données historiques et ne constitue pas un conseil en investissement")
 
-# Disclaimer
 st.markdown("---")
 st.caption(
     "📊 **Méthodologie:** Analyse Markowitz | Annualisation: 252 jours | "
-    "VaR 95% historique | Données: BVMT | © 2024"
+    "VaR 95% historique | Données: BVMT"
 )
